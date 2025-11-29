@@ -10,7 +10,8 @@ from langgraph.graph import StateGraph, END
 load_dotenv()
 
 # --- CONFIGURATION ---
-# We are sticking with the powerful 70b model as requested
+# We use the 70b model for best reasoning. 
+# IF YOU GET RATE LIMIT ERRORS: Change this to "llama-3.1-8b-instant"
 llm = ChatGroq(
     temperature=0, 
     model_name="llama-3.3-70b-versatile", 
@@ -22,8 +23,8 @@ tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
 # --- STATE DEFINITION ---
 class AgentState(TypedDict):
     query: str              # Raw user input
-    chat_history: str       # Conversation history
-    refined_query: str      # Search-optimized query
+    chat_history: str       # Context from previous turns
+    refined_query: str      # Optimized search query
     intent: str
     search_results: List[dict]
     final_recommendation: str
@@ -35,7 +36,7 @@ class AgentState(TypedDict):
 def intent_agent(state: AgentState):
     print(f"DEBUG: Processing '{state['query']}' with History.")
     
-    # Refine the query using the 70b model's superior understanding
+    # Refine the query using history (Context Awareness)
     refine_prompt = ChatPromptTemplate.from_template(
         "You are a Search Query Refiner. \n"
         "CHAT HISTORY:\n{chat_history}\n\n"
@@ -47,7 +48,7 @@ def intent_agent(state: AgentState):
     )
     chain = refine_prompt | llm
     refined_query = chain.invoke({
-        "chat_history": state["chat_history"], 
+        "chat_history": state.get("chat_history", ""), 
         "query": state["query"]
     }).content.strip()
     
@@ -69,11 +70,12 @@ def retrieval_agent(state: AgentState):
     results = tavily.search(query=search_query, search_depth="advanced", max_results=7)
     return {"search_results": results['results']}
 
-# --- AGENT 3: REASONER AGENT (The AI Analyst) ---
+# --- AGENT 3: REASONER AGENT (The Analyst) ---
 def reasoner_agent(state: AgentState):
     print("DEBUG: Reasoner Agent thinking...")
     data = state["search_results"]
     
+    # MERGED PROMPT: Contains Noob Translation + AI Insights + Table Specs
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Return a JSON OBJECT only.\n"
         "GOAL: Provide top 3 options fitting the user's budget.\n"
@@ -91,10 +93,15 @@ def reasoner_agent(state: AgentState):
         "      'specs': {{ 'Performance': '...', 'Build_Quality': '...', 'Key_Feature': '...' }}, \n"
         "      'ai_insights': {{ 'score': 8, 'best_for': '...', 'dealbreaker': '...' }} \n"
         "   }} ] }}\n"
-        "3. AI INSIGHTS RULES:\n"
-        "   - 'score': Give an integer rating (1-10) based on reviews you read.\n"
-        "   - 'best_for': 2-3 words describing the perfect user (e.g., 'Frequent Flyers', 'Bass Heads').\n"
-        "   - 'dealbreaker': 1 short sentence about the biggest DOWNSIDE (e.g., 'Battery life is below average', 'No water resistance'). Be honest!\n"
+        "3. CATEGORY RULE: Use 'Powerhouse', 'Balanced', 'Budget'.\n"
+        "4. TRANSLATION RULE (Critical): \n"
+        "   - In 'full_details', do NOT just list specs.\n"
+        "   - Translate them for a beginner.\n"
+        "   - Example: '16GB RAM: High memory allows you to run many apps at once without slowing down.'\n"
+        "5. INSIGHTS RULE:\n"
+        "   - 'score': 1-10 integer based on reviews.\n"
+        "   - 'dealbreaker': The honest biggest downside (e.g., 'Battery life is short').\n"
+        "   - 'best_for': Specific user type (e.g. 'Students', 'Gamers').\n"
         "\n"
         "SEARCH DATA: {data}"
     )
@@ -111,6 +118,7 @@ def image_fetcher_agent(state: AgentState):
         data = json.loads(clean_text)
         for option in data.get('options', []):
             product_name = option.get('name')
+            # Tavily Image Search (Safe & Free)
             response = tavily.search(
                 query=f"{product_name} product photo white background", 
                 search_depth="basic", include_images=True, max_results=1
