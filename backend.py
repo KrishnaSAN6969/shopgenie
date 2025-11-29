@@ -93,12 +93,12 @@ def retrieval_agent(state: AgentState):
         print(f"Tavily Search Error: {e}")
         return {"search_results": []}
 
-# --- AGENT 3: REASONER AGENT (The Analyst) ---
+# --- AGENT 3: REASONER AGENT (Detailed Analyst) ---
 def reasoner_agent(state: AgentState):
     print("DEBUG: Reasoner Agent thinking...")
     data = state["search_results"]
     
-    # The "Mega Prompt" with all your requirements
+    # UPDATED PROMPT: Asks for 4-5 points instead of 2
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Return a JSON OBJECT only.\n"
         "GOAL: Provide top 3 options fitting the user's budget.\n"
@@ -112,17 +112,17 @@ def reasoner_agent(state: AgentState):
         "      'price': '...', \n"
         "      'summary': '...', \n"
         "      'link': '...', \n"
-        "      'full_details': ['Point 1', 'Point 2'],\n"
+        "      'full_details': ['Benefit 1', 'Benefit 2', 'Benefit 3', 'Benefit 4', 'Benefit 5'],\n"
         "      'specs': {{ 'Performance': '...', 'Build_Quality': '...', 'Key_Feature': '...' }}, \n"
         "      'ai_insights': {{ 'score': 8, 'best_for': '...', 'dealbreaker': '...' }} \n"
         "   }} ] }}\n"
         "3. CATEGORY RULE: Use 'Powerhouse', 'Balanced', 'Budget'.\n"
-        "4. NOOB TRANSLATION RULE: \n"
-        "   - Do NOT just list specs. Translate them.\n"
-        "   - GOOD: '4GB RAM: Good for basic browsing but keep tabs closed.'\n"
+        "4. DETAIL RULE (CRITICAL):\n"
+        "   - 'full_details' must have AT LEAST 4 bullet points.\n"
+        "   - Translate specs into benefits (e.g., '30-hour battery: Enough to last a full week of commuting').\n"
         "5. INSIGHTS RULE:\n"
         "   - 'score': 1-10 integer.\n"
-        "   - 'dealbreaker': Honest warning (e.g. 'No Bluetooth').\n"
+        "   - 'dealbreaker': Honest warning.\n"
         "\n"
         "SEARCH DATA: {data}"
     )
