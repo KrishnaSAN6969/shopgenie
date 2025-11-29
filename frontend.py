@@ -69,7 +69,7 @@ st.caption("The Transparent, Multi-Agent Shopping Assistant")
 if not st.session_state.messages:
     st.markdown("### 👋 Hi, I'm ShopGenie-E.")
     st.markdown("""
-    I am not just a chatbot. I am a **Multi-Agent Decision System** designed to solve the confusion of buying electronics[cite: 2, 3].
+    I am not just a chatbot. I am a **Multi-Agent Decision System** designed to solve the confusion of buying electronics.
     I don't guess; I research in real-time. Here is how my brain works:
     """)
     
