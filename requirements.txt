@@ -5,3 +5,5 @@ langgraph
 tavily-python
 streamlit
 python-dotenv
+langchain-groq
+langchain
