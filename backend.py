@@ -10,8 +10,6 @@ from langgraph.graph import StateGraph, END
 load_dotenv()
 
 # --- CONFIGURATION ---
-# We use the 70b model for best reasoning. 
-# IF YOU GET RATE LIMIT ERRORS: Change this to "llama-3.1-8b-instant"
 llm = ChatGroq(
     temperature=0, 
     model_name="llama-3.3-70b-versatile", 
@@ -22,9 +20,9 @@ tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
 
 # --- STATE DEFINITION ---
 class AgentState(TypedDict):
-    query: str              # Raw user input
-    chat_history: str       # Context from previous turns
-    refined_query: str      # Optimized search query
+    query: str
+    chat_history: str
+    refined_query: str
     intent: str
     search_results: List[dict]
     final_recommendation: str
@@ -32,28 +30,41 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT & MEMORY MANAGER ---
+# --- AGENT 1: INTENT & MEMORY MANAGER (Fixed) ---
 def intent_agent(state: AgentState):
-    print(f"DEBUG: Processing '{state['query']}' with History.")
+    print(f"DEBUG: Processing '{state['query']}'")
     
-    # Refine the query using history (Context Awareness)
-    refine_prompt = ChatPromptTemplate.from_template(
-        "You are a Search Query Refiner. \n"
-        "CHAT HISTORY:\n{chat_history}\n\n"
-        "CURRENT USER INPUT: {query}\n\n"
-        "TASK: Rewrite the user input to be a standalone search query. \n"
-        "If the user says 'cheaper one' or 'compare them', use the history to know WHAT they are referring to.\n"
-        "If the history is empty, just return the user input as is.\n"
-        "OUTPUT: Only the rewritten query string."
+    # NEW PROMPT: Classifies "Chat" vs "Search"
+    prompt = ChatPromptTemplate.from_template(
+        "You are ShopGenie-E. Analyze the user input.\n"
+        "USER INPUT: {query}\n"
+        "HISTORY: {chat_history}\n\n"
+        "TASK: Classify and Respond.\n"
+        "1. IF CASUAL (Greeting, Thanks, Small Talk): Reply as a helpful AI.\n"
+        "   - Format: 'CHAT: [Your text response]'\n"
+        "2. IF SHOPPING (Buying, Comparing, Looking for products): Refine the query.\n"
+        "   - Format: 'SEARCH: [Refined Query]'\n"
     )
-    chain = refine_prompt | llm
-    refined_query = chain.invoke({
+    chain = prompt | llm
+    response = chain.invoke({
         "chat_history": state.get("chat_history", ""), 
         "query": state["query"]
     }).content.strip()
     
-    print(f"DEBUG: Refined Query: {refined_query}")
-    return {"refined_query": refined_query, "intent": "buy_request", "retry_count": state.get("retry_count", 0)}
+    # Logic to route the graph
+    if response.startswith("CHAT:"):
+        return {
+            "intent": "casual_chat", 
+            "final_recommendation": response.replace("CHAT:", "").strip(),
+            "refined_query": ""
+        }
+    else:
+        refined = response.replace("SEARCH:", "").strip()
+        return {
+            "intent": "buy_request", 
+            "refined_query": refined,
+            "retry_count": state.get("retry_count", 0)
+        }
 
 # --- AGENT 2: RETRIEVAL AGENT ---
 def retrieval_agent(state: AgentState):
@@ -70,12 +81,11 @@ def retrieval_agent(state: AgentState):
     results = tavily.search(query=search_query, search_depth="advanced", max_results=7)
     return {"search_results": results['results']}
 
-# --- AGENT 3: REASONER AGENT (The Analyst) ---
+# --- AGENT 3: REASONER AGENT ---
 def reasoner_agent(state: AgentState):
     print("DEBUG: Reasoner Agent thinking...")
     data = state["search_results"]
     
-    # MERGED PROMPT: Contains Noob Translation + AI Insights + Table Specs
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Return a JSON OBJECT only.\n"
         "GOAL: Provide top 3 options fitting the user's budget.\n"
@@ -94,14 +104,12 @@ def reasoner_agent(state: AgentState):
         "      'ai_insights': {{ 'score': 8, 'best_for': '...', 'dealbreaker': '...' }} \n"
         "   }} ] }}\n"
         "3. CATEGORY RULE: Use 'Powerhouse', 'Balanced', 'Budget'.\n"
-        "4. TRANSLATION RULE (Critical): \n"
-        "   - In 'full_details', do NOT just list specs.\n"
-        "   - Translate them for a beginner.\n"
-        "   - Example: '16GB RAM: High memory allows you to run many apps at once without slowing down.'\n"
+        "4. NOOB TRANSLATION RULE: \n"
+        "   - Do NOT just list specs. Translate them.\n"
+        "   - GOOD: '4GB RAM: Good for basic browsing but keep tabs closed.'\n"
         "5. INSIGHTS RULE:\n"
-        "   - 'score': 1-10 integer based on reviews.\n"
-        "   - 'dealbreaker': The honest biggest downside (e.g., 'Battery life is short').\n"
-        "   - 'best_for': Specific user type (e.g. 'Students', 'Gamers').\n"
+        "   - 'score': 1-10 integer.\n"
+        "   - 'dealbreaker': Honest warning.\n"
         "\n"
         "SEARCH DATA: {data}"
     )
@@ -118,7 +126,6 @@ def image_fetcher_agent(state: AgentState):
         data = json.loads(clean_text)
         for option in data.get('options', []):
             product_name = option.get('name')
-            # Tavily Image Search (Safe & Free)
             response = tavily.search(
                 query=f"{product_name} product photo white background", 
                 search_depth="basic", include_images=True, max_results=1
@@ -130,12 +137,9 @@ def image_fetcher_agent(state: AgentState):
 
 # --- AGENT 4: EVALUATOR AGENT ---
 def evaluator_agent(state: AgentState):
-    print("DEBUG: Evaluator Agent auditing...")
     recommendation = state["final_recommendation"]
     retries = state.get("retry_count", 0)
-    
-    if retries >= 3:
-        return {"revision_needed": False, "critique": "Max retries reached."}
+    if retries >= 3: return {"revision_needed": False}
 
     try:
         clean_text = recommendation.replace("```json", "").replace("```", "").strip()
@@ -145,6 +149,12 @@ def evaluator_agent(state: AgentState):
         return {"revision_needed": True, "critique": "Invalid JSON", "retry_count": retries + 1}
 
 # --- GRAPH CONSTRUCTION ---
+def route_intent(state):
+    # NEW: If it's just chat, skip the whole search pipeline!
+    if state["intent"] == "casual_chat":
+        return END
+    return "retrieval_agent"
+
 def decide_next_step(state):
     if state["revision_needed"]:
         return "retrieval_agent"
@@ -158,7 +168,17 @@ workflow.add_node("image_fetcher_agent", image_fetcher_agent)
 workflow.add_node("evaluator_agent", evaluator_agent)
 
 workflow.set_entry_point("intent_agent")
-workflow.add_edge("intent_agent", "retrieval_agent")
+
+# NEW: Conditional Routing after Intent
+workflow.add_conditional_edges(
+    "intent_agent", 
+    route_intent, 
+    {
+        END: END, 
+        "retrieval_agent": "retrieval_agent"
+    }
+)
+
 workflow.add_edge("retrieval_agent", "reasoner_agent")
 workflow.add_edge("reasoner_agent", "image_fetcher_agent")
 workflow.add_edge("image_fetcher_agent", "evaluator_agent")
