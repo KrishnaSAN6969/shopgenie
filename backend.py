@@ -30,22 +30,24 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT AGENT (With Budget Guard) ---
+# --- AGENT 1: INTENT AGENT (Smart Budget Detector) ---
 def intent_agent(state: AgentState):
     print(f"DEBUG: Processing '{state['query']}'")
     
-    # UPDATED PROMPT: Adds the "ASK_BUDGET" logic
+    # NEW PROMPT: Explicitly accepts numbers without '$'
     prompt = ChatPromptTemplate.from_template(
-        "You are ShopGenie-E. Analyze the user input.\n"
-        "USER INPUT: {query}\n"
+        "You are ShopGenie-E. Analyze user input.\n"
+        "INPUT: {query}\n"
         "HISTORY: {chat_history}\n\n"
-        "TASK: Classify and Respond.\n"
-        "1. IF CASUAL (Greeting, Thanks, Small Talk): Reply as a helpful AI.\n"
-        "   - Format: 'CHAT: [Response]'\n"
-        "2. IF SHOPPING request but NO BUDGET/PRICE is mentioned in input or history:\n"
-        "   - Format: 'ASK_BUDGET: [Polite question asking for price range]'\n"
-        "3. IF SHOPPING with Budget identified: Refine the query.\n"
-        "   - Format: 'SEARCH: [Refined Query]'\n"
+        "CRITICAL RULES:\n"
+        "1. Greeting/Small Talk? -> Output 'CHAT: [Response]'\n"
+        "2. DETECT BUDGET: Check for ANY price indicator.\n"
+        "   - Symbols: '$500', '500usd', '€500'\n"
+        "   - Words: 'cheap', 'budget', 'expensive', 'high-end'\n"
+        "   - Raw Numbers: 'under 600', 'max 1000', 'around 300', '500'\n"
+        "3. MISSING BUDGET? -> If user wants to buy but NO price indicator is found in INPUT or HISTORY:\n"
+        "   - Output 'ASK_BUDGET: To help you find the best option, do you have a specific price range in mind?'\n"
+        "4. HAS BUDGET? -> If price is found (e.g. '600'), output 'SEARCH: [Refined Query including the number]'\n"
     )
     chain = prompt | llm
     response = chain.invoke({
@@ -113,7 +115,7 @@ def reasoner_agent(state: AgentState):
         "      'price': '...', \n"
         "      'summary': '...', \n"
         "      'link': '...', \n"
-        "      'full_details': ['Point 1', 'Point 2'],\n"
+        "      'full_details': ['Point 1', 'Point 2', 'Point 3', 'Point 4'],\n"
         "      'specs': {{ 'Performance': '...', 'Build_Quality': '...', 'Key_Feature': '...' }}, \n"
         "      'ai_insights': {{ 'score': 8, 'best_for': '...', 'dealbreaker': '...' }} \n"
         "   }} ] }}\n"
@@ -183,7 +185,6 @@ workflow.add_node("evaluator_agent", evaluator_agent)
 
 workflow.set_entry_point("intent_agent")
 
-# ROUTING LOGIC
 workflow.add_conditional_edges(
     "intent_agent", 
     route_intent, 
