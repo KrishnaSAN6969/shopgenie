@@ -30,15 +30,13 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT AGENT (With Python Guard) ---
+# --- AGENT 1: INTENT AGENT (Fixed Rule Order) ---
 def intent_agent(state: AgentState):
     user_input = state['query'].strip().lower()
     print(f"DEBUG: Processing '{user_input}'")
     
-    # --- 1. HARD CODED GUARD (The Fix for 'hey') ---
-    # We catch simple greetings immediately to prevent hallucination
-    greetings = ["hi", "hii", "hiii", "hey", "heyy", "hello", "hola", "greetings", "yo", "test"]
-    # Remove punctuation like "hey!" -> "hey"
+    # 1. HARD CODED GREETING GUARD
+    greetings = ["hi", "hii", "hiii", "hey", "heyy", "hello", "hola", "greetings", "yo"]
     clean_input = user_input.strip("!.,?")
     
     if clean_input in greetings:
@@ -48,15 +46,17 @@ def intent_agent(state: AgentState):
             "refined_query": ""
         }
 
-    # --- 2. LLM ANALYSIS (For complex inputs) ---
+    # 2. LLM ANALYSIS (Reordered Rules)
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Analyze user input.\n"
         "INPUT: {query}\n"
         "HISTORY: {chat_history}\n\n"
-        "RULES:\n"
-        "1. CASUAL/GREETING? (e.g. 'how are you', 'who are you', 'thanks') -> Output 'CHAT: [Response]'\n"
-        "2. SHOPPING? (Buying, Comparing, looking for products) -> Output 'SEARCH: [Refined Query]'\n"
-        "3. MISSING BUDGET? (Shopping but no price mentioned) -> Output 'ASK_BUDGET: [Question]'\n"
+        "CRITICAL PRIORITY RULES (Check in this order):\n"
+        "1. CASUAL/GREETING? (e.g. 'how are you', 'thanks') -> Output 'CHAT: [Response]'\n"
+        "2. SHOPPING BUT MISSING BUDGET? -> If user wants to buy something but NO price/budget is mentioned (e.g. '$500', 'cheap', 'budget', 'expensive') in INPUT or HISTORY:\n"
+        "   - Output 'ASK_BUDGET: To help you find the best option, do you have a specific price range in mind?'\n"
+        "3. SHOPPING WITH BUDGET? -> If user wants to buy AND price context exists:\n"
+        "   - Output 'SEARCH: [Refined Query]'\n"
     )
     chain = prompt | llm
     response = chain.invoke({
@@ -84,7 +84,7 @@ def intent_agent(state: AgentState):
             "refined_query": refined,
             "retry_count": state.get("retry_count", 0)
         }
-
+    
 # --- AGENT 2: RETRIEVAL AGENT ---
 def retrieval_agent(state: AgentState):
     query = state.get("refined_query", "")
