@@ -30,22 +30,33 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT AGENT (Fixed for "hii") ---
+# --- AGENT 1: INTENT AGENT (With Python Guard) ---
 def intent_agent(state: AgentState):
-    print(f"DEBUG: Processing '{state['query']}'")
+    user_input = state['query'].strip().lower()
+    print(f"DEBUG: Processing '{user_input}'")
     
-    # IMPROVED PROMPT: Explicitly lists informal greetings
+    # --- 1. HARD CODED GUARD (The Fix for 'hey') ---
+    # We catch simple greetings immediately to prevent hallucination
+    greetings = ["hi", "hii", "hiii", "hey", "heyy", "hello", "hola", "greetings", "yo", "test"]
+    # Remove punctuation like "hey!" -> "hey"
+    clean_input = user_input.strip("!.,?")
+    
+    if clean_input in greetings:
+        return {
+            "intent": "casual_chat",
+            "final_recommendation": "Hello! I am ShopGenie-E. How can I help you find the perfect electronics today?",
+            "refined_query": ""
+        }
+
+    # --- 2. LLM ANALYSIS (For complex inputs) ---
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Analyze user input.\n"
         "INPUT: {query}\n"
         "HISTORY: {chat_history}\n\n"
-        "CRITICAL RULES (Check in order):\n"
-        "1. GREETING / CHAT? -> IF input is 'hi', 'hii', 'hello', 'hey', 'thanks', 'cool', 'ok', or small talk:\n"
-        "   - Output 'CHAT: [Friendly response]'\n"
-        "2. MISSING BUDGET? -> IF shopping request but NO price/budget found:\n"
-        "   - Output 'ASK_BUDGET: [Question]'\n"
-        "3. SHOPPING? -> IF shopping request WITH budget:\n"
-        "   - Output 'SEARCH: [Refined Query]'\n"
+        "RULES:\n"
+        "1. CASUAL/GREETING? (e.g. 'how are you', 'who are you', 'thanks') -> Output 'CHAT: [Response]'\n"
+        "2. SHOPPING? (Buying, Comparing, looking for products) -> Output 'SEARCH: [Refined Query]'\n"
+        "3. MISSING BUDGET? (Shopping but no price mentioned) -> Output 'ASK_BUDGET: [Question]'\n"
     )
     chain = prompt | llm
     response = chain.invoke({
@@ -53,24 +64,20 @@ def intent_agent(state: AgentState):
         "query": state["query"]
     }).content.strip()
     
-    # ROBUST PARSING (Handles "Chat:", "CHAT:", etc.)
-    if response.upper().startswith("CHAT:"):
-        # Extract the text after "CHAT:"
-        reply = response.split(":", 1)[1].strip()
+    # Routing Logic
+    if response.startswith("CHAT:"):
         return {
             "intent": "casual_chat", 
-            "final_recommendation": reply,
+            "final_recommendation": response.replace("CHAT:", "").strip(),
             "refined_query": ""
         }
-    elif response.upper().startswith("ASK_BUDGET:"):
-        reply = response.split(":", 1)[1].strip()
+    elif response.startswith("ASK_BUDGET:"):
         return {
             "intent": "ask_budget", 
-            "final_recommendation": reply,
+            "final_recommendation": response.replace("ASK_BUDGET:", "").strip(),
             "refined_query": ""
         }
     else:
-        # Fallback: Assume it's a search
         refined = response.replace("SEARCH:", "").strip()
         return {
             "intent": "buy_request", 
@@ -83,9 +90,7 @@ def retrieval_agent(state: AgentState):
     query = state.get("refined_query", "")
     critique = state.get("critique", "")
     
-    # Safety Check: Never search for empty string
-    if not query:
-        return {"search_results": []}
+    if not query: return {"search_results": []}
 
     if state.get("revision_needed"):
         print(f"DEBUG: Retrying search: {critique}")
@@ -97,7 +102,7 @@ def retrieval_agent(state: AgentState):
     try:
         results = tavily.search(query=search_query, search_depth="advanced", max_results=7)
         return {"search_results": results['results']}
-    except Exception as e:
+    except:
         return {"search_results": []}
 
 # --- AGENT 3: REASONER AGENT ---
@@ -123,12 +128,8 @@ def reasoner_agent(state: AgentState):
         "      'ai_insights': {{ 'score': 8, 'best_for': '...', 'dealbreaker': '...' }} \n"
         "   }} ] }}\n"
         "3. CATEGORY RULE: Use 'Powerhouse', 'Balanced', 'Budget'.\n"
-        "4. NOOB TRANSLATION RULE: \n"
-        "   - Do NOT just list specs. Translate them.\n"
-        "   - GOOD: '4GB RAM: Good for basic browsing but keep tabs closed.'\n"
-        "5. INSIGHTS RULE:\n"
-        "   - 'score': 1-10 integer.\n"
-        "   - 'dealbreaker': Honest warning.\n"
+        "4. TRANSLATE SPECS: Don't just list specs, explain them for beginners.\n"
+        "5. INSIGHTS RULE: Give honest score (1-10) and dealbreaker.\n"
         "\n"
         "SEARCH DATA: {data}"
     )
@@ -169,7 +170,7 @@ def evaluator_agent(state: AgentState):
 
 # --- GRAPH CONSTRUCTION ---
 def route_intent(state):
-    # If Chat OR Ask Budget, stop here!
+    # Stop immediately if chat or budget question
     if state["intent"] in ["casual_chat", "ask_budget"]:
         return END
     return "retrieval_agent"
@@ -188,7 +189,6 @@ workflow.add_node("evaluator_agent", evaluator_agent)
 
 workflow.set_entry_point("intent_agent")
 
-# ROUTING LOGIC
 workflow.add_conditional_edges(
     "intent_agent", 
     route_intent, 
