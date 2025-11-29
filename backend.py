@@ -30,24 +30,22 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT AGENT (Smart Budget Detector) ---
+# --- AGENT 1: INTENT AGENT (Fixed for "hii") ---
 def intent_agent(state: AgentState):
     print(f"DEBUG: Processing '{state['query']}'")
     
-    # NEW PROMPT: Explicitly accepts numbers without '$'
+    # IMPROVED PROMPT: Explicitly lists informal greetings
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Analyze user input.\n"
         "INPUT: {query}\n"
         "HISTORY: {chat_history}\n\n"
-        "CRITICAL RULES:\n"
-        "1. Greeting/Small Talk? -> Output 'CHAT: [Response]'\n"
-        "2. DETECT BUDGET: Check for ANY price indicator.\n"
-        "   - Symbols: '$500', '500usd', '€500'\n"
-        "   - Words: 'cheap', 'budget', 'expensive', 'high-end'\n"
-        "   - Raw Numbers: 'under 600', 'max 1000', 'around 300', '500'\n"
-        "3. MISSING BUDGET? -> If user wants to buy but NO price indicator is found in INPUT or HISTORY:\n"
-        "   - Output 'ASK_BUDGET: To help you find the best option, do you have a specific price range in mind?'\n"
-        "4. HAS BUDGET? -> If price is found (e.g. '600'), output 'SEARCH: [Refined Query including the number]'\n"
+        "CRITICAL RULES (Check in order):\n"
+        "1. GREETING / CHAT? -> IF input is 'hi', 'hii', 'hello', 'hey', 'thanks', 'cool', 'ok', or small talk:\n"
+        "   - Output 'CHAT: [Friendly response]'\n"
+        "2. MISSING BUDGET? -> IF shopping request but NO price/budget found:\n"
+        "   - Output 'ASK_BUDGET: [Question]'\n"
+        "3. SHOPPING? -> IF shopping request WITH budget:\n"
+        "   - Output 'SEARCH: [Refined Query]'\n"
     )
     chain = prompt | llm
     response = chain.invoke({
@@ -55,20 +53,24 @@ def intent_agent(state: AgentState):
         "query": state["query"]
     }).content.strip()
     
-    # Routing Logic
-    if response.startswith("CHAT:"):
+    # ROBUST PARSING (Handles "Chat:", "CHAT:", etc.)
+    if response.upper().startswith("CHAT:"):
+        # Extract the text after "CHAT:"
+        reply = response.split(":", 1)[1].strip()
         return {
             "intent": "casual_chat", 
-            "final_recommendation": response.replace("CHAT:", "").strip(),
+            "final_recommendation": reply,
             "refined_query": ""
         }
-    elif response.startswith("ASK_BUDGET:"):
+    elif response.upper().startswith("ASK_BUDGET:"):
+        reply = response.split(":", 1)[1].strip()
         return {
             "intent": "ask_budget", 
-            "final_recommendation": response.replace("ASK_BUDGET:", "").strip(),
+            "final_recommendation": reply,
             "refined_query": ""
         }
     else:
+        # Fallback: Assume it's a search
         refined = response.replace("SEARCH:", "").strip()
         return {
             "intent": "buy_request", 
@@ -81,6 +83,7 @@ def retrieval_agent(state: AgentState):
     query = state.get("refined_query", "")
     critique = state.get("critique", "")
     
+    # Safety Check: Never search for empty string
     if not query:
         return {"search_results": []}
 
@@ -166,7 +169,7 @@ def evaluator_agent(state: AgentState):
 
 # --- GRAPH CONSTRUCTION ---
 def route_intent(state):
-    # If Chat OR Ask Budget, stop here and reply to user
+    # If Chat OR Ask Budget, stop here!
     if state["intent"] in ["casual_chat", "ask_budget"]:
         return END
     return "retrieval_agent"
@@ -185,6 +188,7 @@ workflow.add_node("evaluator_agent", evaluator_agent)
 
 workflow.set_entry_point("intent_agent")
 
+# ROUTING LOGIC
 workflow.add_conditional_edges(
     "intent_agent", 
     route_intent, 
