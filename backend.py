@@ -10,8 +10,6 @@ from langgraph.graph import StateGraph, END
 load_dotenv()
 
 # --- CONFIGURATION ---
-# We use the 70b model for superior logic. 
-# IF YOU GET A RATE LIMIT ERROR: Change this to "llama-3.1-8b-instant"
 llm = ChatGroq(
     temperature=0, 
     model_name="llama-3.3-70b-versatile", 
@@ -22,9 +20,9 @@ tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
 
 # --- STATE DEFINITION ---
 class AgentState(TypedDict):
-    query: str              # Raw user input
-    chat_history: str       # Context from previous turns
-    refined_query: str      # Optimized search query
+    query: str
+    chat_history: str
+    refined_query: str
     intent: str
     search_results: List[dict]
     final_recommendation: str
@@ -32,20 +30,21 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT & MEMORY MANAGER (The Router) ---
+# --- AGENT 1: INTENT AGENT (With Budget Guard) ---
 def intent_agent(state: AgentState):
     print(f"DEBUG: Processing '{state['query']}'")
     
-    # PROMPT: Classify "Chat" vs "Search" and Refine Query if needed
+    # UPDATED PROMPT: Adds the "ASK_BUDGET" logic
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Analyze the user input.\n"
         "USER INPUT: {query}\n"
         "HISTORY: {chat_history}\n\n"
         "TASK: Classify and Respond.\n"
-        "1. IF CASUAL (Greeting, Thanks, Small Talk, 'Yes/No' answers): Reply as a helpful AI.\n"
-        "   - Format: 'CHAT: [Your text response]'\n"
-        "2. IF SHOPPING (Buying, Comparing, Looking for products): Refine the query into a search string.\n"
-        "   - Use history to understand context (e.g. 'cheaper one' -> 'cheap laptop').\n"
+        "1. IF CASUAL (Greeting, Thanks, Small Talk): Reply as a helpful AI.\n"
+        "   - Format: 'CHAT: [Response]'\n"
+        "2. IF SHOPPING request but NO BUDGET/PRICE is mentioned in input or history:\n"
+        "   - Format: 'ASK_BUDGET: [Polite question asking for price range]'\n"
+        "3. IF SHOPPING with Budget identified: Refine the query.\n"
         "   - Format: 'SEARCH: [Refined Query]'\n"
     )
     chain = prompt | llm
@@ -54,11 +53,17 @@ def intent_agent(state: AgentState):
         "query": state["query"]
     }).content.strip()
     
-    # Logic to split the response
+    # Routing Logic
     if response.startswith("CHAT:"):
         return {
             "intent": "casual_chat", 
             "final_recommendation": response.replace("CHAT:", "").strip(),
+            "refined_query": ""
+        }
+    elif response.startswith("ASK_BUDGET:"):
+        return {
+            "intent": "ask_budget", 
+            "final_recommendation": response.replace("ASK_BUDGET:", "").strip(),
             "refined_query": ""
         }
     else:
@@ -69,14 +74,12 @@ def intent_agent(state: AgentState):
             "retry_count": state.get("retry_count", 0)
         }
 
-# --- AGENT 2: RETRIEVAL AGENT (With Safety Check) ---
+# --- AGENT 2: RETRIEVAL AGENT ---
 def retrieval_agent(state: AgentState):
     query = state.get("refined_query", "")
     critique = state.get("critique", "")
     
-    # SAFETY CHECK: If query is empty, stop here to prevent Tavily crash
     if not query:
-        print("DEBUG: Empty query detected. Skipping search.")
         return {"search_results": []}
 
     if state.get("revision_needed"):
@@ -90,15 +93,13 @@ def retrieval_agent(state: AgentState):
         results = tavily.search(query=search_query, search_depth="advanced", max_results=7)
         return {"search_results": results['results']}
     except Exception as e:
-        print(f"Tavily Search Error: {e}")
         return {"search_results": []}
 
-# --- AGENT 3: REASONER AGENT (Detailed Analyst) ---
+# --- AGENT 3: REASONER AGENT ---
 def reasoner_agent(state: AgentState):
     print("DEBUG: Reasoner Agent thinking...")
     data = state["search_results"]
     
-    # UPDATED PROMPT: Asks for 4-5 points instead of 2
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Return a JSON OBJECT only.\n"
         "GOAL: Provide top 3 options fitting the user's budget.\n"
@@ -112,14 +113,14 @@ def reasoner_agent(state: AgentState):
         "      'price': '...', \n"
         "      'summary': '...', \n"
         "      'link': '...', \n"
-        "      'full_details': ['Benefit 1', 'Benefit 2', 'Benefit 3', 'Benefit 4', 'Benefit 5'],\n"
+        "      'full_details': ['Point 1', 'Point 2'],\n"
         "      'specs': {{ 'Performance': '...', 'Build_Quality': '...', 'Key_Feature': '...' }}, \n"
         "      'ai_insights': {{ 'score': 8, 'best_for': '...', 'dealbreaker': '...' }} \n"
         "   }} ] }}\n"
         "3. CATEGORY RULE: Use 'Powerhouse', 'Balanced', 'Budget'.\n"
-        "4. DETAIL RULE (CRITICAL):\n"
-        "   - 'full_details' must have AT LEAST 4 bullet points.\n"
-        "   - Translate specs into benefits (e.g., '30-hour battery: Enough to last a full week of commuting').\n"
+        "4. NOOB TRANSLATION RULE: \n"
+        "   - Do NOT just list specs. Translate them.\n"
+        "   - GOOD: '4GB RAM: Good for basic browsing but keep tabs closed.'\n"
         "5. INSIGHTS RULE:\n"
         "   - 'score': 1-10 integer.\n"
         "   - 'dealbreaker': Honest warning.\n"
@@ -163,8 +164,8 @@ def evaluator_agent(state: AgentState):
 
 # --- GRAPH CONSTRUCTION ---
 def route_intent(state):
-    # CRITICAL: If intent is just chat, SKIP the search engine entirely!
-    if state["intent"] == "casual_chat":
+    # If Chat OR Ask Budget, stop here and reply to user
+    if state["intent"] in ["casual_chat", "ask_budget"]:
         return END
     return "retrieval_agent"
 
