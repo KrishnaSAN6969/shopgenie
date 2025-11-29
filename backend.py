@@ -10,6 +10,8 @@ from langgraph.graph import StateGraph, END
 load_dotenv()
 
 # --- CONFIGURATION ---
+# We use the 70b model for superior logic. 
+# IF YOU GET A RATE LIMIT ERROR: Change this to "llama-3.1-8b-instant"
 llm = ChatGroq(
     temperature=0, 
     model_name="llama-3.3-70b-versatile", 
@@ -20,9 +22,9 @@ tavily = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
 
 # --- STATE DEFINITION ---
 class AgentState(TypedDict):
-    query: str
-    chat_history: str
-    refined_query: str
+    query: str              # Raw user input
+    chat_history: str       # Context from previous turns
+    refined_query: str      # Optimized search query
     intent: str
     search_results: List[dict]
     final_recommendation: str
@@ -30,19 +32,20 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT & MEMORY MANAGER (Fixed) ---
+# --- AGENT 1: INTENT & MEMORY MANAGER (The Router) ---
 def intent_agent(state: AgentState):
     print(f"DEBUG: Processing '{state['query']}'")
     
-    # NEW PROMPT: Classifies "Chat" vs "Search"
+    # PROMPT: Classify "Chat" vs "Search" and Refine Query if needed
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Analyze the user input.\n"
         "USER INPUT: {query}\n"
         "HISTORY: {chat_history}\n\n"
         "TASK: Classify and Respond.\n"
-        "1. IF CASUAL (Greeting, Thanks, Small Talk): Reply as a helpful AI.\n"
+        "1. IF CASUAL (Greeting, Thanks, Small Talk, 'Yes/No' answers): Reply as a helpful AI.\n"
         "   - Format: 'CHAT: [Your text response]'\n"
-        "2. IF SHOPPING (Buying, Comparing, Looking for products): Refine the query.\n"
+        "2. IF SHOPPING (Buying, Comparing, Looking for products): Refine the query into a search string.\n"
+        "   - Use history to understand context (e.g. 'cheaper one' -> 'cheap laptop').\n"
         "   - Format: 'SEARCH: [Refined Query]'\n"
     )
     chain = prompt | llm
@@ -51,7 +54,7 @@ def intent_agent(state: AgentState):
         "query": state["query"]
     }).content.strip()
     
-    # Logic to route the graph
+    # Logic to split the response
     if response.startswith("CHAT:"):
         return {
             "intent": "casual_chat", 
@@ -66,11 +69,16 @@ def intent_agent(state: AgentState):
             "retry_count": state.get("retry_count", 0)
         }
 
-# --- AGENT 2: RETRIEVAL AGENT ---
+# --- AGENT 2: RETRIEVAL AGENT (With Safety Check) ---
 def retrieval_agent(state: AgentState):
-    query = state["refined_query"]
+    query = state.get("refined_query", "")
     critique = state.get("critique", "")
     
+    # SAFETY CHECK: If query is empty, stop here to prevent Tavily crash
+    if not query:
+        print("DEBUG: Empty query detected. Skipping search.")
+        return {"search_results": []}
+
     if state.get("revision_needed"):
         print(f"DEBUG: Retrying search: {critique}")
         search_query = f"{query} buy page amazon bestbuy walmart {critique}"
@@ -78,14 +86,19 @@ def retrieval_agent(state: AgentState):
         print("DEBUG: Initial search...")
         search_query = f"{query} price buy online site:amazon.com OR site:bestbuy.com OR site:walmart.com"
     
-    results = tavily.search(query=search_query, search_depth="advanced", max_results=7)
-    return {"search_results": results['results']}
+    try:
+        results = tavily.search(query=search_query, search_depth="advanced", max_results=7)
+        return {"search_results": results['results']}
+    except Exception as e:
+        print(f"Tavily Search Error: {e}")
+        return {"search_results": []}
 
-# --- AGENT 3: REASONER AGENT ---
+# --- AGENT 3: REASONER AGENT (The Analyst) ---
 def reasoner_agent(state: AgentState):
     print("DEBUG: Reasoner Agent thinking...")
     data = state["search_results"]
     
+    # The "Mega Prompt" with all your requirements
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Return a JSON OBJECT only.\n"
         "GOAL: Provide top 3 options fitting the user's budget.\n"
@@ -109,7 +122,7 @@ def reasoner_agent(state: AgentState):
         "   - GOOD: '4GB RAM: Good for basic browsing but keep tabs closed.'\n"
         "5. INSIGHTS RULE:\n"
         "   - 'score': 1-10 integer.\n"
-        "   - 'dealbreaker': Honest warning.\n"
+        "   - 'dealbreaker': Honest warning (e.g. 'No Bluetooth').\n"
         "\n"
         "SEARCH DATA: {data}"
     )
@@ -150,7 +163,7 @@ def evaluator_agent(state: AgentState):
 
 # --- GRAPH CONSTRUCTION ---
 def route_intent(state):
-    # NEW: If it's just chat, skip the whole search pipeline!
+    # CRITICAL: If intent is just chat, SKIP the search engine entirely!
     if state["intent"] == "casual_chat":
         return END
     return "retrieval_agent"
@@ -169,7 +182,7 @@ workflow.add_node("evaluator_agent", evaluator_agent)
 
 workflow.set_entry_point("intent_agent")
 
-# NEW: Conditional Routing after Intent
+# ROUTING LOGIC
 workflow.add_conditional_edges(
     "intent_agent", 
     route_intent, 
