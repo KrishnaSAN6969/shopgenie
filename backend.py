@@ -102,6 +102,7 @@ def retrieval_agent(state: AgentState):
     except:
         return {"search_results": []}
 
+
 # --- AGENT 3: REASONER AGENT ---
 def reasoner_agent(state: AgentState):
     print("DEBUG: Reasoner Agent thinking...")
@@ -120,14 +121,17 @@ def reasoner_agent(state: AgentState):
         "      'price': '...', \n"
         "      'summary': '...', \n"
         "      'link': '...', \n"
+        "      'fit_summary': 'This is the perfect choice for you because...', \n"
         "      'full_details': ['Point 1', 'Point 2', 'Point 3', 'Point 4'],\n"
+        "      'tech_specs': {{ 'Processor': '...', 'RAM': '...', 'Storage': '...', 'Display': '...', 'Battery': '...' }}, \n"
         "      'specs': {{ 'Performance': '...', 'Build_Quality': '...', 'Key_Feature': '...' }}, \n"
         "      'ai_insights': {{ 'score': 8, 'best_for': '...', 'dealbreaker': '...' }} \n"
         "   }} ] }}\n"
         "3. CATEGORY RULE: Use 'Powerhouse', 'Balanced', 'Budget'.\n"
-        "4. NOOB TRANSLATION RULE: \n"
-        "   - Do NOT just list specs. Translate them.\n"
-        "   - GOOD: '4GB RAM: Good for basic browsing but keep tabs closed.'\n"
+        "4. CONTENT RULES: \n"
+        "   - 'fit_summary': Short paragraph (2 sentences) on why it matches the user.\n"
+        "   - 'full_details': Translate benefits (e.g. '8GB RAM: Good for multitasking').\n"
+        "   - 'tech_specs': Raw technical data (e.g. 'Intel Core i5-1235U').\n"
         "5. INSIGHTS RULE:\n"
         "   - 'score': 1-10 integer.\n"
         "   - 'dealbreaker': Honest warning.\n"
