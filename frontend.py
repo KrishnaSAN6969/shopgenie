@@ -1,54 +1,86 @@
 import streamlit as st
 import json
 import pandas as pd
+import os
 from backend import app 
 
-# 1. PAGE CONFIGURATION & STYLING
-st.set_page_config(page_title="ShopGenie-E", page_icon="🛍️", layout="wide")
+# 1. PAGE CONFIGURATION
+st.set_page_config(page_title="ShopGenie-E", page_icon="🧞", layout="wide")
 
-# Custom CSS for modern UI and centering
+# --- CUSTOM THEME (Matching Your Logo) ---
 st.markdown("""
     <style>
+    /* Main Background & Text adjustments would depend on Streamlit settings, 
+       but we can style specific elements to match the logo */
+    
+    /* 1. BUTTONS: Deep Purple Gradient (Like the logo background) */
     .stButton>button {
-        border-radius: 20px;
+        background: linear-gradient(90deg, #2b1055 0%, #7597de 100%);
+        color: white;
+        border-radius: 12px;
+        border: none;
+        padding: 10px 20px;
         font-weight: 600;
-        border: 1px solid #ddd;
+        transition: all 0.3s ease;
     }
-    .agent-card {
-        background-color: #f0f2f6;
-        padding: 20px;
+    .stButton>button:hover {
+        transform: scale(1.02);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        color: #ffd700; /* Gold text on hover */
+    }
+
+    /* 2. CARDS: Clean look with a Gold Accent Border */
+    div[data-testid="stVerticalBlock"] > div[style*="border"] {
+        border: 1px solid #e0e0e0 !important;
+        border-top: 4px solid #ffd700 !important; /* The Genie Gold */
         border-radius: 10px;
-        text-align: center;
-        margin-bottom: 10px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        background-color: #ffffff;
     }
-    /* Centering the landing page text */
-    .landing-text {
-        text-align: center;
-        padding: 20px;
+
+    /* 3. METRICS in Sidebar */
+    div[data-testid="stMetricValue"] {
+        color: #2b1055; /* Deep Purple numbers */
+    }
+
+    /* 4. LANDING PAGE TEXT */
+    .landing-header {
+        font-family: 'Helvetica', sans-serif;
+        color: #2b1055;
+        font-weight: 800;
+        font-size: 3rem;
+        margin-bottom: 0;
+    }
+    .landing-sub {
+        color: #7597de;
+        font-size: 1.2rem;
+        font-weight: 500;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# 2. SESSION STATE MANAGEMENT
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "selected_product" not in st.session_state:
-    st.session_state.selected_product = None
-if "last_json_response" not in st.session_state:
-    st.session_state.last_json_response = None
+# 2. SESSION STATE
+if "messages" not in st.session_state: st.session_state.messages = []
+if "selected_product" not in st.session_state: st.session_state.selected_product = None
+if "last_json_response" not in st.session_state: st.session_state.last_json_response = None
 
-# 3. SIDEBAR (SYSTEM MONITOR)
+# 3. SIDEBAR (With Logo)
 with st.sidebar:
-    st.header("System Monitor")
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.metric("Agents", "4", delta="Active")
-    with col_b:
-        st.metric("Latency", "24ms", delta="-12ms")
+    # Use the local logo file
+    if os.path.exists("shopgenie_logo.jpg"):
+        st.image("shopgenie_logo.jpg", use_container_width=True)
+    else:
+        st.header("🧞 ShopGenie-E") # Fallback if image missing
     
     st.divider()
-    st.subheader("Agent Activity Log")
+    st.subheader("System Monitor")
+    
+    col_a, col_b = st.columns(2)
+    with col_a: st.metric("Agents", "4", delta="Active")
+    with col_b: st.metric("Latency", "24ms", delta="-12ms")
+    
+    st.divider()
+    st.caption("Agent Status")
     status_box = st.empty()
     status_box.info("💤 System Standby")
     
@@ -59,33 +91,31 @@ with st.sidebar:
         st.session_state.last_json_response = None
         st.rerun()
 
-# 4. LANDING PAGE (Logo & Brief)
-# Only shows when there are no messages
+# 4. LANDING PAGE (The Logo Showcase)
 if not st.session_state.messages:
-    # Use columns to center the image
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # Centered Layout
+    col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        # A nice shopping bag / AI icon
-        st.image("https://img.icons8.com/clouds/500/000000/online-shop-2.png", use_container_width=True)
-    
-    st.markdown("""
-        <div class="landing-text">
-            <h1>ShopGenie-E</h1>
-            <h3 style='color: #555;'>The Intelligent Shopping Assistant</h3>
-            <p style='font-size: 18px; color: #666;'>
-                I research real-time prices, analyze technical specs, and provide honest, 
-                bias-free recommendations for electronics. <br>
-                Just tell me what you need, and I'll handle the rest.
-            </p>
-        </div>
-    """, unsafe_allow_html=True)
+        if os.path.exists("shopgenie_logo.jpg"):
+            st.image("shopgenie_logo.png", use_container_width=True)
+        else:
+            st.title("🧞 ShopGenie-E")
+            st.warning("⚠️ Save your logo as 'shopgenie_logo.jpg' in the folder to see it here!")
+
+        st.markdown("""
+            <div style='text-align: center; padding-top: 10px;'>
+                <p class='landing-sub'>
+                    <b>The Intelligent Multi-Agent Shopping Assistant</b><br>
+                    Real-Time Prices • Spec Translation • Bias-Free Ranking
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
 
 # 5. CHAT HISTORY VIEW
 for msg in st.session_state.messages:
     if msg["role"] == "user":
-        with st.chat_message("user"):
-            st.markdown(msg["content"])
+        with st.chat_message("user"): st.markdown(msg["content"])
     elif msg["role"] == "assistant":
         with st.chat_message("assistant"):
             if "{" in msg["content"] and "options" in msg["content"]:
@@ -99,49 +129,27 @@ user_input = st.chat_input("Ex: Best gaming laptop under $1200...")
 if user_input:
     st.session_state.selected_product = None 
     st.session_state.messages.append({"role": "user", "content": user_input})
-    
-    # Hide the landing page title by rerunning loop (optional, but cleaner)
-    
-    with st.chat_message("user"):
-        st.markdown(user_input)
+    with st.chat_message("user"): st.markdown(user_input)
     
     # Context
     recent_history = st.session_state.messages[-4:] 
     history_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in recent_history])
     
-    inputs = {
-        "query": user_input, 
-        "chat_history": history_text,
-        "refined_query": "",
-        "intent": "", 
-        "search_results": [], 
-        "final_recommendation": "", 
-        "critique": "", 
-        "revision_needed": False
-    }
-    
+    inputs = {"query": user_input, "chat_history": history_text}
     raw_response = ""
     
-    with st.spinner("🔄 Activating Multi-Agent Pipeline..."):
+    with st.spinner("🧞 Genie Agents are working..."):
         for output in app.stream(inputs):
             for key, value in output.items():
                 if key == "intent_agent":
                     intent = value.get("intent", "")
-                    if intent == "casual_chat":
-                         status_box.info("💬 Intent: Casual Chat")
-                    elif intent == "ask_budget":
-                         status_box.warning("💰 Intent: Asking for Budget")
-                    else:
-                         status_box.info(f"🧠 Context: {value['refined_query']}")
-                elif key == "retrieval_agent":
-                    status_box.warning(f"🌐 Retrieval: Found {len(value['search_results'])} products")
-                elif key == "reasoner_agent":
-                    status_box.success("🤔 Reasoner: Analyzing trade-offs...")
-                elif key == "image_fetcher_agent":
-                    status_box.info("🖼️ Visuals: Fetching images...")
-                
-                if "final_recommendation" in value:
-                    raw_response = value["final_recommendation"]
+                    if intent == "casual_chat": status_box.info("💬 Intent: Casual Chat")
+                    elif intent == "ask_budget": status_box.warning("💰 Intent: Asking Budget")
+                    else: status_box.info(f"🧠 Context: {value['refined_query']}")
+                elif key == "retrieval_agent": status_box.warning(f"🌐 Found {len(value['search_results'])} items")
+                elif key == "reasoner_agent": status_box.success("🤔 Analyzing & Scoring...")
+                elif key == "image_fetcher_agent": status_box.info("🖼️ Fetching Photos...")
+                if "final_recommendation" in value: raw_response = value["final_recommendation"]
 
     if "{" in raw_response and "options" in raw_response:
         st.session_state.last_json_response = raw_response
@@ -160,44 +168,37 @@ if st.session_state.last_json_response:
 
         if options:
             st.divider()
-            st.subheader("🎯 Top 3 Recommendations")
+            st.markdown("### 🎯 Top 3 Recommendations")
             
             col1, col2, col3 = st.columns(3)
             cols = [col1, col2, col3]
-            
             for i, option in enumerate(options):
                 if i < 3:
                     with cols[i]:
+                        # The CSS makes these cards look "Gold-Topped"
                         with st.container(border=True):
-                            if "Powerhouse" in option['category']:
-                                st.markdown(":rocket: **Powerhouse**")
-                            elif "Balanced" in option['category']:
-                                st.markdown(":balance_scale: **Balanced**")
-                            else:
-                                st.markdown(":moneybag: **Budget**")
+                            if "Powerhouse" in option['category']: st.markdown(":rocket: **Powerhouse**")
+                            elif "Balanced" in option['category']: st.markdown(":balance_scale: **Balanced**")
+                            else: st.markdown(":moneybag: **Budget**")
                             
                             images = option.get('images', [])
-                            if images:
-                                st.image(images[0], use_container_width=True)
-                                
+                            if images: st.image(images[0], use_container_width=True)
                             st.markdown(f"#### {option['name']}")
                             st.caption(option['price'])
                             
                             insights = option.get('ai_insights', {})
                             score = insights.get('score', 0)
-                            st.progress(score / 10, text=f"AI Score: {score}/10")
+                            st.progress(score / 10, text=f"Genie Score: {score}/10")
                             
                             st.info(f"**Best For:** {insights.get('best_for', 'General Use')}")
+                            with st.expander("⚠️ Dealbreaker"): st.warning(insights.get('dealbreaker', 'None found'))
                             
-                            with st.expander("⚠️ Dealbreaker"):
-                                st.warning(insights.get('dealbreaker', 'None found'))
-
+                            # The button will use the new Purple Gradient style
                             if st.button("Select This", key=f"btn_{i}", use_container_width=True):
                                 st.session_state.selected_product = option
 
             st.divider()
-            st.subheader("📊 Comparison Analysis")
-            
+            st.markdown("### 📊 Comparison Analysis")
             table_data = []
             for opt in options:
                 specs = opt.get('specs', {})
@@ -210,7 +211,6 @@ if st.session_state.last_json_response:
                     "Key Feature": specs.get('Key_Feature', '-'), 
                 }
                 table_data.append(row)
-            
             if table_data:
                 df = pd.DataFrame(table_data)
                 st.table(df.set_index("Category"))
@@ -221,38 +221,28 @@ if st.session_state.last_json_response:
                 st.subheader(f"📝 Deep Dive: {p['name']}")
                 
                 d_col1, d_col2 = st.columns([3, 1])
-                
                 with d_col1:
                     st.markdown("#### Why this fits you")
-                    summary = p.get('fit_summary', '')
-                    if summary:
-                        st.info(summary)
+                    if p.get('fit_summary'): st.info(p['fit_summary'])
                     
-                    tech_specs = p.get('tech_specs', {})
-                    if tech_specs:
+                    if p.get('tech_specs'):
                         st.markdown("#### 📋 Technical Specifications")
-                        for key, value in tech_specs.items():
-                            st.markdown(f"**{key}:** {value}")
+                        for k, v in p['tech_specs'].items(): st.markdown(f"**{k}:** {v}")
                     
                     st.divider()
-
                     st.markdown("#### Key Benefits (Translated)")
-                    details = p.get('full_details', "No details available.")
-                    if isinstance(details, list):
-                        details = "\n".join([f"- {item}" for item in details])
-                    st.markdown(details)
+                    details = p.get('full_details', [])
+                    if isinstance(details, list): st.markdown("\n".join([f"- {item}" for item in details]))
                     
                     st.markdown("#### Gallery")
                     images = p.get('images', [])
                     if len(images) > 1:
                         g_cols = st.columns(3)
                         for j, img in enumerate(images[:3]):
-                            with g_cols[j]:
-                                st.image(img, use_container_width=True)
+                            with g_cols[j]: st.image(img, use_container_width=True)
 
                 with d_col2:
                     st.success(f"**Price:** {p['price']}")
                     st.link_button(f"🛒 Buy Now", p['link'], type="primary", use_container_width=True)
 
-    except Exception as e:
-        pass
+    except Exception as e: pass
