@@ -32,7 +32,7 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT AGENT (Product Guard Fix) ---
+# --- AGENT 1: INTENT & CONTEXT MANAGER ---
 def intent_agent(state: AgentState):
     user_input = state['query'].strip().lower()
     history = state.get("chat_history", "").lower()
@@ -49,24 +49,19 @@ def intent_agent(state: AgentState):
             "use_case": "general"
         }
 
-    # 2. PRODUCT DETECTION (The Critical Fix)
-    # We ask the AI: Is there a physical product mentioned here?
+    # 2. USE CASE & PRODUCT CHECK
     product_check_prompt = ChatPromptTemplate.from_template(
         "Analyze text: '{query}'.\n"
-        "Does this text explicitly mention an electronic product category to buy (e.g. 'laptop', 'phone', 'monitor', 'keyboard', 'headphones')?\n"
+        "Does this text explicitly mention an electronic product category to buy (e.g. 'laptop', 'phone', 'monitor')?\n"
         "Answer YES or NO."
     )
     has_product = (product_check_prompt | llm).invoke({"query": state["query"]}).content.strip().upper()
 
-    # 3. USE CASE EXTRACTION
     extraction_prompt = ChatPromptTemplate.from_template(
         "Extract USE CASE from: '{query}'. Examples: 'Student', 'Gaming', 'Coding'. Default to 'General'."
     )
     use_case = (extraction_prompt | llm).invoke({"query": state["query"]}).content.strip()
 
-    # --- LOGIC BRANCHING ---
-    
-    # CASE A: User gave context but NO product (e.g. "I am a student")
     if "NO" in has_product:
         return {
             "intent": "casual_chat",
@@ -75,7 +70,7 @@ def intent_agent(state: AgentState):
             "use_case": use_case
         }
 
-    # CASE B: User mentioned a product. Now check BUDGET.
+    # 3. BUDGET GUARD
     price_keywords = ['$', 'usd', 'price', 'budget', 'cheap', 'expensive', 'cost', 'under', 'over', 'less', 'max']
     has_price = any(w in user_input or w in history for w in price_keywords) or bool(re.search(r'\d+', user_input))
     
@@ -87,7 +82,7 @@ def intent_agent(state: AgentState):
             "use_case": use_case
         }
 
-    # CASE C: Product + Budget = SEARCH
+    # 4. REFINE QUERY
     refine_prompt = ChatPromptTemplate.from_template(
         "Refine search query for: '{query}'. Context: {use_case}. Include 'best' and 'price'."
     )
@@ -107,16 +102,14 @@ def retrieval_agent(state: AgentState):
     
     if not query: return {"search_results": []}
 
-    # Add use-case to search to filter results intelligently
     search_query = f"{query} best for {use_case} price reviews site:amazon.com OR site:bestbuy.com OR site:walmart.com"
-    
     try:
         results = tavily.search(query=search_query, search_depth="advanced", max_results=8)
         return {"search_results": results['results']}
     except:
         return {"search_results": []}
 
-# --- AGENT 3: REASONER AGENT (The Detailed Analyst) ---
+# --- AGENT 3: REASONER AGENT (Fixed Length Logic) ---
 def reasoner_agent(state: AgentState):
     print("DEBUG: Reasoner Agent thinking...")
     data = state["search_results"]
@@ -142,10 +135,10 @@ def reasoner_agent(state: AgentState):
         "   }} ] }}\n"
         "3. CATEGORY RULE: Use 'Powerhouse', 'Balanced', 'Budget'.\n"
         "4. 'fit_summary' RULE (CRITICAL):\n"
-        "   - Write a PERSUASIVE, MEDIUM-LENGTH PARAGRAPH (approx 50-70 words).\n"
-        "   - Do NOT write a single sentence.\n"
-        "   - Connect specific specs to the user's '{use_case}'.\n"
-        "   - Example: 'This laptop is an excellent choice for your engineering studies because the dedicated GPU handles CAD software smoothly. The 16GB RAM ensures you can multitask without lag, while the durable build quality is perfect for carrying around campus daily.'\n"
+        "   - You MUST write a DETAILED paragraph of exactly 3 to 4 sentences.\n"
+        "   - Do NOT write a single sentence. Be descriptive.\n"
+        "   - Explicitly connect features to the '{use_case}'.\n"
+        "   - Example: 'This laptop is perfect for coding because the i7 processor handles compiling code quickly. The 16GB RAM ensures you can run multiple servers without lag. Additionally, the screen is sharp enough for long reading sessions.'\n"
         "5. TRANSLATE BENEFITS: 'full_details' must explain specs in plain English.\n"
         "\n"
         "SEARCH DATA: {data}"
