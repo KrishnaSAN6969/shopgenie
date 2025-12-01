@@ -24,7 +24,7 @@ class AgentState(TypedDict):
     query: str
     chat_history: str
     refined_query: str
-    use_case: str           # NEW: Tracks "Coding", "Gaming", etc.
+    use_case: str
     intent: str
     search_results: List[dict]
     final_recommendation: str
@@ -32,7 +32,7 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT & CONTEXT MANAGER ---
+# --- AGENT 1: INTENT AGENT (Product Guard Fix) ---
 def intent_agent(state: AgentState):
     user_input = state['query'].strip().lower()
     history = state.get("chat_history", "").lower()
@@ -44,52 +44,54 @@ def intent_agent(state: AgentState):
     if clean_input in greetings:
         return {
             "intent": "casual_chat",
-            "final_recommendation": "Hello! I am ShopGenie-E. Tell me what you do (e.g., 'I am a student' or 'I edit videos') and I'll find the perfect gear for you.",
+            "final_recommendation": "Hello! I am ShopGenie-E. Tell me what you do (e.g. 'I am a student') or what you need, and I'll find the perfect gear.",
             "refined_query": "",
             "use_case": "general"
         }
 
-    # 2. BUDGET & USE CASE EXTRACTION
-    # We ask the LLM to extract the specific USE CASE (Job/Activity)
-    extraction_prompt = ChatPromptTemplate.from_template(
-        "Analyze this user query: '{query}'\n"
-        "History: {chat_history}\n\n"
-        "TASK 1: Extract the USE CASE (e.g. 'Gaming', 'Coding', 'Video Editing', 'Student', 'General Use'). Default to 'General Use' if unclear.\n"
-        "TASK 2: Check for Budget.\n"
-        "TASK 3: Output format: 'USE_CASE: [Use Case] | REFINED_SEARCH: [Search Query]'\n"
-        "   - Example: 'USE_CASE: Coding | REFINED_SEARCH: best laptops for coding under 1000'\n"
-        "   - Example: 'USE_CASE: Gaming | REFINED_SEARCH: gaming laptop with rtx 4060'\n"
+    # 2. PRODUCT DETECTION (The Critical Fix)
+    # We ask the AI: Is there a physical product mentioned here?
+    product_check_prompt = ChatPromptTemplate.from_template(
+        "Analyze text: '{query}'.\n"
+        "Does this text explicitly mention an electronic product category to buy (e.g. 'laptop', 'phone', 'monitor', 'keyboard', 'headphones')?\n"
+        "Answer YES or NO."
     )
-    chain = extraction_prompt | llm
-    analysis = chain.invoke({
-        "chat_history": state.get("chat_history", ""), 
-        "query": state["query"]
-    }).content.strip()
-    
-    # Parse the LLM output
-    use_case = "General Use"
-    refined_query = state["query"]
-    
-    if "USE_CASE:" in analysis and "REFINED_SEARCH:" in analysis:
-        parts = analysis.split("|")
-        use_case = parts[0].replace("USE_CASE:", "").strip()
-        refined_query = parts[1].replace("REFINED_SEARCH:", "").strip()
+    has_product = (product_check_prompt | llm).invoke({"query": state["query"]}).content.strip().upper()
 
-    # 3. BUDGET GUARD
-    price_keywords = ['$', 'usd', 'price', 'budget', 'cheap', 'expensive', 'cost', 'under', 'over', 'less', 'max']
-    has_price = any(w in user_input or w in history for w in price_keywords) or bool(re.search(r'\d+', user_input))
+    # 3. USE CASE EXTRACTION
+    extraction_prompt = ChatPromptTemplate.from_template(
+        "Extract USE CASE from: '{query}'. Examples: 'Student', 'Gaming', 'Coding'. Default to 'General'."
+    )
+    use_case = (extraction_prompt | llm).invoke({"query": state["query"]}).content.strip()
+
+    # --- LOGIC BRANCHING ---
     
-    # If looking to buy but no budget found
-    check_shop = ChatPromptTemplate.from_template("Is '{query}' a shopping request? YES/NO.")
-    is_shopping = (check_shop | llm).invoke({"query": state["query"]}).content.strip().upper()
-    
-    if "YES" in is_shopping and not has_price:
+    # CASE A: User gave context but NO product (e.g. "I am a student")
+    if "NO" in has_product:
         return {
-            "intent": "ask_budget",
-            "final_recommendation": f"I see you are looking for something for **{use_case}**. To give you the best recommendation, what is your price range?",
+            "intent": "casual_chat",
+            "final_recommendation": f"Got it! As a **{use_case}**, you have specific needs. What exact product are you looking for? (e.g. 'A laptop', 'Headphones')",
             "refined_query": "",
             "use_case": use_case
         }
+
+    # CASE B: User mentioned a product. Now check BUDGET.
+    price_keywords = ['$', 'usd', 'price', 'budget', 'cheap', 'expensive', 'cost', 'under', 'over', 'less', 'max']
+    has_price = any(w in user_input or w in history for w in price_keywords) or bool(re.search(r'\d+', user_input))
+    
+    if not has_price:
+        return {
+            "intent": "ask_budget",
+            "final_recommendation": f"To find the best **{use_case}** device for you, I need a price range. What is your budget? (e.g. '$500', 'cheap')",
+            "refined_query": "",
+            "use_case": use_case
+        }
+
+    # CASE C: Product + Budget = SEARCH
+    refine_prompt = ChatPromptTemplate.from_template(
+        "Refine search query for: '{query}'. Context: {use_case}. Include 'best' and 'price'."
+    )
+    refined_query = (refine_prompt | llm).invoke({"query": state["query"], "use_case": use_case}).content.strip()
 
     return {
         "intent": "buy_request", 
@@ -98,16 +100,14 @@ def intent_agent(state: AgentState):
         "retry_count": state.get("retry_count", 0)
     }
 
-# --- AGENT 2: RETRIEVAL AGENT (Use-Case Aware) ---
+# --- AGENT 2: RETRIEVAL AGENT ---
 def retrieval_agent(state: AgentState):
     query = state.get("refined_query", "")
-    use_case = state.get("use_case", "general")
+    use_case = state.get("use_case", "General")
     
     if not query: return {"search_results": []}
 
-    print(f"DEBUG: Searching for '{query}' | Context: {use_case}")
-    
-    # We explicitly add the use case to the search to filter bad results early
+    # Add use-case to search to filter results intelligently
     search_query = f"{query} best for {use_case} price reviews site:amazon.com OR site:bestbuy.com OR site:walmart.com"
     
     try:
@@ -116,7 +116,7 @@ def retrieval_agent(state: AgentState):
     except:
         return {"search_results": []}
 
-# --- AGENT 3: REASONER AGENT (Strict Suitability Filter) ---
+# --- AGENT 3: REASONER AGENT (The Detailed Analyst) ---
 def reasoner_agent(state: AgentState):
     print("DEBUG: Reasoner Agent thinking...")
     data = state["search_results"]
@@ -126,25 +126,27 @@ def reasoner_agent(state: AgentState):
         "You are ShopGenie-E. Return a JSON OBJECT only.\n"
         "GOAL: Provide top 3 options fitting the user's budget AND USE CASE: '{use_case}'.\n"
         "\n"
-        "CRITICAL SUITABILITY RULES:\n"
-        "1. IF Use Case is 'Gaming': DISCARD any laptop without a dedicated GPU (RTX/GTX). Chromebooks are BANNED.\n"
-        "2. IF Use Case is 'Video Editing/3D': DISCARD anything with less than 16GB RAM.\n"
-        "3. IF Use Case is 'Student/Travel': Prioritize Battery Life and Weight.\n"
-        "4. IF Use Case is 'Coding': Prioritize Processor Speed and Screen Real Estate.\n"
-        "\n"
-        "JSON STRUCTURE:\n"
-        "{{ 'options': [ {{ \n"
+        "RULES:\n"
+        "1. Output valid JSON only.\n"
+        "2. Structure: {{ 'options': [ {{ \n"
         "      'category': 'Powerhouse', \n"
         "      'name': '...', \n"
         "      'price': '...', \n"
         "      'summary': '...', \n"
         "      'link': '...', \n"
-        "      'fit_summary': 'Since you need this for {use_case}, this fits because...', \n"
+        "      'fit_summary': '...', \n"
         "      'full_details': ['Point 1', 'Point 2', 'Point 3', 'Point 4'],\n"
         "      'tech_specs': {{ 'Spec1': '...', 'Spec2': '...' }}, \n"
         "      'specs': {{ 'Performance': '...', 'Build_Quality': '...', 'Key_Feature': '...' }}, \n"
         "      'ai_insights': {{ 'score': 8, 'best_for': '...', 'dealbreaker': '...' }} \n"
         "   }} ] }}\n"
+        "3. CATEGORY RULE: Use 'Powerhouse', 'Balanced', 'Budget'.\n"
+        "4. 'fit_summary' RULE (CRITICAL):\n"
+        "   - Write a PERSUASIVE, MEDIUM-LENGTH PARAGRAPH (approx 50-70 words).\n"
+        "   - Do NOT write a single sentence.\n"
+        "   - Connect specific specs to the user's '{use_case}'.\n"
+        "   - Example: 'This laptop is an excellent choice for your engineering studies because the dedicated GPU handles CAD software smoothly. The 16GB RAM ensures you can multitask without lag, while the durable build quality is perfect for carrying around campus daily.'\n"
+        "5. TRANSLATE BENEFITS: 'full_details' must explain specs in plain English.\n"
         "\n"
         "SEARCH DATA: {data}"
     )
