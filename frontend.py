@@ -7,13 +7,10 @@ from backend import app
 # 1. PAGE CONFIGURATION
 st.set_page_config(page_title="ShopGenie-E", page_icon="🧞", layout="wide")
 
-# --- CUSTOM THEME (Matching Your Logo) ---
+# --- CUSTOM THEME (Genie Purple & Gold) ---
 st.markdown("""
     <style>
-    /* Main Background & Text adjustments would depend on Streamlit settings, 
-       but we can style specific elements to match the logo */
-    
-    /* 1. BUTTONS: Deep Purple Gradient (Like the logo background) */
+    /* 1. BUTTONS: Deep Purple Gradient */
     .stButton>button {
         background: linear-gradient(90deg, #2b1055 0%, #7597de 100%);
         color: white;
@@ -32,25 +29,18 @@ st.markdown("""
     /* 2. CARDS: Clean look with a Gold Accent Border */
     div[data-testid="stVerticalBlock"] > div[style*="border"] {
         border: 1px solid #e0e0e0 !important;
-        border-top: 4px solid #ffd700 !important; /* The Genie Gold */
+        border-top: 4px solid #ffd700 !important; /* Gold Top */
         border-radius: 10px;
         box-shadow: 0 2px 5px rgba(0,0,0,0.05);
         background-color: #ffffff;
     }
 
-    /* 3. METRICS in Sidebar */
+    /* 3. METRICS */
     div[data-testid="stMetricValue"] {
-        color: #2b1055; /* Deep Purple numbers */
+        color: #2b1055;
     }
 
-    /* 4. LANDING PAGE TEXT */
-    .landing-header {
-        font-family: 'Helvetica', sans-serif;
-        color: #2b1055;
-        font-weight: 800;
-        font-size: 3rem;
-        margin-bottom: 0;
-    }
+    /* 4. LANDING TEXT */
     .landing-sub {
         color: #7597de;
         font-size: 1.2rem;
@@ -64,13 +54,13 @@ if "messages" not in st.session_state: st.session_state.messages = []
 if "selected_product" not in st.session_state: st.session_state.selected_product = None
 if "last_json_response" not in st.session_state: st.session_state.last_json_response = None
 
-# 3. SIDEBAR (With Logo)
+# 3. SIDEBAR (With PNG Logo)
 with st.sidebar:
-    # Use the local logo file
-    if os.path.exists("shopgenie_logo.jpg"):
-        st.image("shopgenie_logo.jpg", use_container_width=True)
+    # UPDATED: Checks for .png
+    if os.path.exists("shopgenie_logo.png"):
+        st.image("shopgenie_logo.png", use_container_width=True)
     else:
-        st.header("🧞 ShopGenie-E") # Fallback if image missing
+        st.header("🧞 ShopGenie-E") 
     
     st.divider()
     st.subheader("System Monitor")
@@ -91,17 +81,17 @@ with st.sidebar:
         st.session_state.last_json_response = None
         st.rerun()
 
-# 4. LANDING PAGE (The Logo Showcase)
+# 4. LANDING PAGE (Logo Showcase)
 if not st.session_state.messages:
-    # Centered Layout
     col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
-        if os.path.exists("shopgenie_logo.jpg"):
+        # UPDATED: Checks for .png
+        if os.path.exists("shopgenie_logo.png"):
             st.image("shopgenie_logo.png", use_container_width=True)
         else:
             st.title("🧞 ShopGenie-E")
-            st.warning("⚠️ Save your logo as 'shopgenie_logo.jpg' in the folder to see it here!")
+            st.warning("⚠️ Save your logo as 'shopgenie_logo.png'!")
 
         st.markdown("""
             <div style='text-align: center; padding-top: 10px;'>
@@ -175,7 +165,6 @@ if st.session_state.last_json_response:
             for i, option in enumerate(options):
                 if i < 3:
                     with cols[i]:
-                        # The CSS makes these cards look "Gold-Topped"
                         with st.container(border=True):
                             if "Powerhouse" in option['category']: st.markdown(":rocket: **Powerhouse**")
                             elif "Balanced" in option['category']: st.markdown(":balance_scale: **Balanced**")
@@ -193,7 +182,6 @@ if st.session_state.last_json_response:
                             st.info(f"**Best For:** {insights.get('best_for', 'General Use')}")
                             with st.expander("⚠️ Dealbreaker"): st.warning(insights.get('dealbreaker', 'None found'))
                             
-                            # The button will use the new Purple Gradient style
                             if st.button("Select This", key=f"btn_{i}", use_container_width=True):
                                 st.session_state.selected_product = option
 
