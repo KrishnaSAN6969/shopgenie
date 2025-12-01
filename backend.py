@@ -11,8 +11,6 @@ from langgraph.graph import StateGraph, END
 load_dotenv()
 
 # --- CONFIGURATION ---
-# Use "llama-3.3-70b-versatile" for intelligence.
-# Use "llama-3.1-8b-instant" if you hit Rate Limits.
 llm = ChatGroq(
     temperature=0, 
     model_name="llama-3.3-70b-versatile", 
@@ -26,6 +24,7 @@ class AgentState(TypedDict):
     query: str
     chat_history: str
     refined_query: str
+    use_case: str           # NEW: Tracks "Coding", "Gaming", etc.
     intent: str
     search_results: List[dict]
     final_recommendation: str
@@ -33,114 +32,131 @@ class AgentState(TypedDict):
     revision_needed: bool
     retry_count: int
 
-# --- AGENT 1: INTENT & MEMORY MANAGER ---
+# --- AGENT 1: INTENT & CONTEXT MANAGER ---
 def intent_agent(state: AgentState):
     user_input = state['query'].strip().lower()
     history = state.get("chat_history", "").lower()
     print(f"DEBUG: Processing '{user_input}'")
     
-    # 1. GREETING GUARD (Instant Reply)
+    # 1. GREETING GUARD
     greetings = ["hi", "hii", "hiii", "hey", "heyy", "hello", "hola", "greetings", "yo", "good morning"]
     clean_input = user_input.strip("!.,?")
     if clean_input in greetings:
         return {
             "intent": "casual_chat",
-            "final_recommendation": "Hello! I am ShopGenie-E. I can help you find the best electronics. What are you looking for today?",
-            "refined_query": ""
+            "final_recommendation": "Hello! I am ShopGenie-E. Tell me what you do (e.g., 'I am a student' or 'I edit videos') and I'll find the perfect gear for you.",
+            "refined_query": "",
+            "use_case": "general"
         }
 
-    # 2. BUDGET GUARD (Forces user to give price)
-    price_keywords = ['$', 'usd', 'price', 'budget', 'cheap', 'expensive', 'cost', 'affordable', 'premium', 'under', 'over', 'less', 'spending', 'max']
-    has_price_word = any(word in user_input or word in history for word in price_keywords)
-    has_number = bool(re.search(r'\d+', user_input)) or bool(re.search(r'\d+', history))
-    
-    # Quick check if it's a shopping query
-    check_prompt = ChatPromptTemplate.from_template("Is '{query}' a request to buy/find a product? Answer YES or NO.")
-    is_shopping = (check_prompt | llm).invoke({"query": state["query"]}).content.strip().upper()
-    
-    if "YES" in is_shopping and not (has_price_word or has_number):
-        return {
-            "intent": "ask_budget",
-            "final_recommendation": "To help you find the best option, could you please specify your **budget**? (e.g. 'under $500' or 'cheap')",
-            "refined_query": ""
-        }
-
-    # 3. QUERY REFINEMENT (Uses History)
-    refine_prompt = ChatPromptTemplate.from_template(
-        "You are ShopGenie-E. User Input: {query}\n"
+    # 2. BUDGET & USE CASE EXTRACTION
+    # We ask the LLM to extract the specific USE CASE (Job/Activity)
+    extraction_prompt = ChatPromptTemplate.from_template(
+        "Analyze this user query: '{query}'\n"
         "History: {chat_history}\n\n"
-        "Task: Create a refined search query for the product. Combine history if needed (e.g. 'cheaper' -> 'cheaper gaming laptop').\n"
-        "Output: Just the search string."
+        "TASK 1: Extract the USE CASE (e.g. 'Gaming', 'Coding', 'Video Editing', 'Student', 'General Use'). Default to 'General Use' if unclear.\n"
+        "TASK 2: Check for Budget.\n"
+        "TASK 3: Output format: 'USE_CASE: [Use Case] | REFINED_SEARCH: [Search Query]'\n"
+        "   - Example: 'USE_CASE: Coding | REFINED_SEARCH: best laptops for coding under 1000'\n"
+        "   - Example: 'USE_CASE: Gaming | REFINED_SEARCH: gaming laptop with rtx 4060'\n"
     )
-    chain = refine_prompt | llm
-    refined_query = chain.invoke({
+    chain = extraction_prompt | llm
+    analysis = chain.invoke({
         "chat_history": state.get("chat_history", ""), 
         "query": state["query"]
     }).content.strip()
     
+    # Parse the LLM output
+    use_case = "General Use"
+    refined_query = state["query"]
+    
+    if "USE_CASE:" in analysis and "REFINED_SEARCH:" in analysis:
+        parts = analysis.split("|")
+        use_case = parts[0].replace("USE_CASE:", "").strip()
+        refined_query = parts[1].replace("REFINED_SEARCH:", "").strip()
+
+    # 3. BUDGET GUARD
+    price_keywords = ['$', 'usd', 'price', 'budget', 'cheap', 'expensive', 'cost', 'under', 'over', 'less', 'max']
+    has_price = any(w in user_input or w in history for w in price_keywords) or bool(re.search(r'\d+', user_input))
+    
+    # If looking to buy but no budget found
+    check_shop = ChatPromptTemplate.from_template("Is '{query}' a shopping request? YES/NO.")
+    is_shopping = (check_shop | llm).invoke({"query": state["query"]}).content.strip().upper()
+    
+    if "YES" in is_shopping and not has_price:
+        return {
+            "intent": "ask_budget",
+            "final_recommendation": f"I see you are looking for something for **{use_case}**. To give you the best recommendation, what is your price range?",
+            "refined_query": "",
+            "use_case": use_case
+        }
+
     return {
         "intent": "buy_request", 
         "refined_query": refined_query,
+        "use_case": use_case,
         "retry_count": state.get("retry_count", 0)
     }
 
-# --- AGENT 2: RETRIEVAL AGENT ---
+# --- AGENT 2: RETRIEVAL AGENT (Use-Case Aware) ---
 def retrieval_agent(state: AgentState):
     query = state.get("refined_query", "")
-    critique = state.get("critique", "")
+    use_case = state.get("use_case", "general")
     
     if not query: return {"search_results": []}
 
-    if state.get("revision_needed"):
-        print(f"DEBUG: Retrying search: {critique}")
-        search_query = f"{query} buy page amazon bestbuy walmart {critique}"
-    else:
-        print("DEBUG: Initial search...")
-        search_query = f"{query} price buy online site:amazon.com OR site:bestbuy.com OR site:walmart.com"
+    print(f"DEBUG: Searching for '{query}' | Context: {use_case}")
+    
+    # We explicitly add the use case to the search to filter bad results early
+    search_query = f"{query} best for {use_case} price reviews site:amazon.com OR site:bestbuy.com OR site:walmart.com"
     
     try:
-        results = tavily.search(query=search_query, search_depth="advanced", max_results=7)
+        results = tavily.search(query=search_query, search_depth="advanced", max_results=8)
         return {"search_results": results['results']}
     except:
         return {"search_results": []}
 
-# --- AGENT 3: REASONER AGENT (The Mega-Brain) ---
+# --- AGENT 3: REASONER AGENT (Strict Suitability Filter) ---
 def reasoner_agent(state: AgentState):
     print("DEBUG: Reasoner Agent thinking...")
     data = state["search_results"]
+    use_case = state.get("use_case", "General Use")
     
     prompt = ChatPromptTemplate.from_template(
         "You are ShopGenie-E. Return a JSON OBJECT only.\n"
-        "GOAL: Provide top 3 options fitting the user's budget.\n"
-        "CONTEXT: User asked '{query}'.\n"
+        "GOAL: Provide top 3 options fitting the user's budget AND USE CASE: '{use_case}'.\n"
         "\n"
-        "RULES:\n"
-        "1. Output valid JSON only.\n"
-        "2. Structure: {{ 'options': [ {{ \n"
+        "CRITICAL SUITABILITY RULES:\n"
+        "1. IF Use Case is 'Gaming': DISCARD any laptop without a dedicated GPU (RTX/GTX). Chromebooks are BANNED.\n"
+        "2. IF Use Case is 'Video Editing/3D': DISCARD anything with less than 16GB RAM.\n"
+        "3. IF Use Case is 'Student/Travel': Prioritize Battery Life and Weight.\n"
+        "4. IF Use Case is 'Coding': Prioritize Processor Speed and Screen Real Estate.\n"
+        "\n"
+        "JSON STRUCTURE:\n"
+        "{{ 'options': [ {{ \n"
         "      'category': 'Powerhouse', \n"
         "      'name': '...', \n"
         "      'price': '...', \n"
         "      'summary': '...', \n"
         "      'link': '...', \n"
-        "      'fit_summary': 'Write 3 sentences explaining why this fits the user...', \n"
-        "      'full_details': ['Benefit 1', 'Benefit 2', 'Benefit 3', 'Benefit 4'],\n"
-        "      'tech_specs': {{ 'Spec1': 'Value1', 'Spec2': 'Value2', ... }}, \n"
+        "      'fit_summary': 'Since you need this for {use_case}, this fits because...', \n"
+        "      'full_details': ['Point 1', 'Point 2', 'Point 3', 'Point 4'],\n"
+        "      'tech_specs': {{ 'Spec1': '...', 'Spec2': '...' }}, \n"
         "      'specs': {{ 'Performance': '...', 'Build_Quality': '...', 'Key_Feature': '...' }}, \n"
         "      'ai_insights': {{ 'score': 8, 'best_for': '...', 'dealbreaker': '...' }} \n"
         "   }} ] }}\n"
-        "3. CATEGORY RULE: Use 'Powerhouse', 'Balanced', 'Budget'.\n"
-        "4. DYNAMIC SPECS: Extract 4-5 raw specs relevant to the product (Laptop=CPU/RAM, Audio=Battery/ANC).\n"
-        "5. NOOB TRANSLATION: 'full_details' must explain benefits in plain English.\n"
         "\n"
         "SEARCH DATA: {data}"
     )
     chain = prompt | llm
-    response = chain.invoke({"data": data, "query": state["refined_query"]})
+    response = chain.invoke({
+        "data": data, 
+        "use_case": use_case
+    })
     return {"final_recommendation": response.content}
 
 # --- AGENT 3.5: IMAGE FETCHER AGENT ---
 def image_fetcher_agent(state: AgentState):
-    print("DEBUG: Image Fetcher looking for photos...")
     recommendation = state["final_recommendation"]
     try:
         clean_text = recommendation.replace("```json", "").replace("```", "").strip()
@@ -158,20 +174,14 @@ def image_fetcher_agent(state: AgentState):
 
 # --- AGENT 4: EVALUATOR AGENT ---
 def evaluator_agent(state: AgentState):
-    recommendation = state["final_recommendation"]
-    retries = state.get("retry_count", 0)
-    if retries >= 3: return {"revision_needed": False}
-
     try:
-        clean_text = recommendation.replace("```json", "").replace("```", "").strip()
-        json.loads(clean_text)
-        return {"revision_needed": False, "critique": "None"}
+        json.loads(state["final_recommendation"].replace("```json", "").replace("```", "").strip())
+        return {"revision_needed": False}
     except:
-        return {"revision_needed": True, "critique": "Invalid JSON", "retry_count": retries + 1}
+        return {"revision_needed": True, "critique": "Invalid JSON", "retry_count": state.get("retry_count", 0) + 1}
 
 # --- GRAPH CONSTRUCTION ---
 def route_intent(state):
-    # Stop graph if just chatting or asking for budget
     if state["intent"] in ["casual_chat", "ask_budget"]: return END
     return "retrieval_agent"
 

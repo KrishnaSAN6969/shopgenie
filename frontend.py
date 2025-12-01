@@ -6,7 +6,7 @@ from backend import app
 # 1. PAGE CONFIGURATION & STYLING
 st.set_page_config(page_title="ShopGenie-E", page_icon="🛍️", layout="wide")
 
-# Custom CSS for a modern, clean look
+# Custom CSS for modern UI and centering
 st.markdown("""
     <style>
     .stButton>button {
@@ -21,11 +21,13 @@ st.markdown("""
         text-align: center;
         margin-bottom: 10px;
     }
+    /* Centering the landing page text */
+    .landing-text {
+        text-align: center;
+        padding: 20px;
+    }
     </style>
 """, unsafe_allow_html=True)
-
-st.title("🛍️ ShopGenie-E")
-st.caption("The Transparent, Multi-Agent Shopping Assistant")
 
 # 2. SESSION STATE MANAGEMENT
 if "messages" not in st.session_state:
@@ -39,7 +41,6 @@ if "last_json_response" not in st.session_state:
 with st.sidebar:
     st.header("System Monitor")
     
-    # Fake metrics to simulate a complex system
     col_a, col_b = st.columns(2)
     with col_a:
         st.metric("Agents", "4", delta="Active")
@@ -58,30 +59,27 @@ with st.sidebar:
         st.session_state.last_json_response = None
         st.rerun()
 
-# 4. SELF-INTRODUCTION (Only visible on start)
+# 4. LANDING PAGE (Logo & Brief)
+# Only shows when there are no messages
 if not st.session_state.messages:
-    st.markdown("### 👋 Hi, I'm ShopGenie-E.")
+    # Use columns to center the image
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col2:
+        # A nice shopping bag / AI icon
+        st.image("https://img.icons8.com/clouds/500/000000/online-shop-2.png", use_container_width=True)
+    
     st.markdown("""
-    I am a **Multi-Agent Decision System** designed to eliminate shopping bias.
-    I research real-time data, translate technical jargon, and audit results for accuracy.
-    """)
-    
-    # 4-Column Layout explaining the Agents
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.info("**🧠 Intent Agent**")
-        st.caption("Decides if you are buying, comparing, or chatting.")
-    with c2:
-        st.warning("**🌐 Retrieval Agent**")
-        st.caption("Scrapes live pricing from Amazon, BestBuy, & Walmart.")
-    with c3:
-        st.success("**🤔 Reasoner Agent**")
-        st.caption("Ranks products and translates specs into plain English.")
-    with c4:
-        st.error("**✅ Evaluator Agent**")
-        st.caption("Audits results to prevent hallucinations.")
-    
-    st.divider()
+        <div class="landing-text">
+            <h1>ShopGenie-E</h1>
+            <h3 style='color: #555;'>The Intelligent Shopping Assistant</h3>
+            <p style='font-size: 18px; color: #666;'>
+                I research real-time prices, analyze technical specs, and provide honest, 
+                bias-free recommendations for electronics. <br>
+                Just tell me what you need, and I'll handle the rest.
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
 
 # 5. CHAT HISTORY VIEW
 for msg in st.session_state.messages:
@@ -90,24 +88,24 @@ for msg in st.session_state.messages:
             st.markdown(msg["content"])
     elif msg["role"] == "assistant":
         with st.chat_message("assistant"):
-            # If it's a JSON response, show a simple placeholder
             if "{" in msg["content"] and "options" in msg["content"]:
                 st.markdown("✅ *Market Research Complete (See Dashboard below)*")
             else:
                 st.markdown(msg["content"])
 
 # 6. INPUT HANDLING
-user_input = st.chat_input("Ex: Best noise-cancelling headphones under $200...")
+user_input = st.chat_input("Ex: Best gaming laptop under $1200...")
 
 if user_input:
-    # Append User Message
     st.session_state.selected_product = None 
     st.session_state.messages.append({"role": "user", "content": user_input})
+    
+    # Hide the landing page title by rerunning loop (optional, but cleaner)
     
     with st.chat_message("user"):
         st.markdown(user_input)
     
-    # Prepare Context (Last 4 messages)
+    # Context
     recent_history = st.session_state.messages[-4:] 
     history_text = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in recent_history])
     
@@ -124,7 +122,6 @@ if user_input:
     
     raw_response = ""
     
-    # Run Agents with Visual Feedback in Sidebar
     with st.spinner("🔄 Activating Multi-Agent Pipeline..."):
         for output in app.stream(inputs):
             for key, value in output.items():
@@ -136,7 +133,6 @@ if user_input:
                          status_box.warning("💰 Intent: Asking for Budget")
                     else:
                          status_box.info(f"🧠 Context: {value['refined_query']}")
-                
                 elif key == "retrieval_agent":
                     status_box.warning(f"🌐 Retrieval: Found {len(value['search_results'])} products")
                 elif key == "reasoner_agent":
@@ -147,17 +143,15 @@ if user_input:
                 if "final_recommendation" in value:
                     raw_response = value["final_recommendation"]
 
-    # Logic: If raw_response is just text (Chat/Ask Budget), clear the dashboard
     if "{" in raw_response and "options" in raw_response:
         st.session_state.last_json_response = raw_response
     else:
         st.session_state.last_json_response = None
 
-    # Save and Refresh
     st.session_state.messages.append({"role": "assistant", "content": raw_response})
     st.rerun()
 
-# 7. THE DASHBOARD (Results View)
+# 7. DASHBOARD VIEW
 if st.session_state.last_json_response:
     try:
         clean_json = st.session_state.last_json_response.replace("```json", "").replace("```", "").strip()
@@ -168,7 +162,6 @@ if st.session_state.last_json_response:
             st.divider()
             st.subheader("🎯 Top 3 Recommendations")
             
-            # --- SECTION A: PRODUCT CARDS ---
             col1, col2, col3 = st.columns(3)
             cols = [col1, col2, col3]
             
@@ -176,7 +169,6 @@ if st.session_state.last_json_response:
                 if i < 3:
                     with cols[i]:
                         with st.container(border=True):
-                            # Badge logic
                             if "Powerhouse" in option['category']:
                                 st.markdown(":rocket: **Powerhouse**")
                             elif "Balanced" in option['category']:
@@ -184,7 +176,6 @@ if st.session_state.last_json_response:
                             else:
                                 st.markdown(":moneybag: **Budget**")
                             
-                            # Image
                             images = option.get('images', [])
                             if images:
                                 st.image(images[0], use_container_width=True)
@@ -192,7 +183,6 @@ if st.session_state.last_json_response:
                             st.markdown(f"#### {option['name']}")
                             st.caption(option['price'])
                             
-                            # AI Insights
                             insights = option.get('ai_insights', {})
                             score = insights.get('score', 0)
                             st.progress(score / 10, text=f"AI Score: {score}/10")
@@ -202,11 +192,9 @@ if st.session_state.last_json_response:
                             with st.expander("⚠️ Dealbreaker"):
                                 st.warning(insights.get('dealbreaker', 'None found'))
 
-                            # Selection Button
                             if st.button("Select This", key=f"btn_{i}", use_container_width=True):
                                 st.session_state.selected_product = option
 
-            # --- SECTION B: COMPARISON TABLE ---
             st.divider()
             st.subheader("📊 Comparison Analysis")
             
@@ -227,7 +215,6 @@ if st.session_state.last_json_response:
                 df = pd.DataFrame(table_data)
                 st.table(df.set_index("Category"))
 
-            # --- SECTION C: DEEP DIVE (Selected Product) ---
             if st.session_state.selected_product:
                 p = st.session_state.selected_product
                 st.divider()
@@ -236,30 +223,25 @@ if st.session_state.last_json_response:
                 d_col1, d_col2 = st.columns([3, 1])
                 
                 with d_col1:
-                    # 1. Fit Summary (Blue Box)
                     st.markdown("#### Why this fits you")
                     summary = p.get('fit_summary', '')
                     if summary:
                         st.info(summary)
                     
-                    # 2. Tech Specs (Clean List)
                     tech_specs = p.get('tech_specs', {})
                     if tech_specs:
                         st.markdown("#### 📋 Technical Specifications")
-                        # Display as bullet points for clarity
                         for key, value in tech_specs.items():
                             st.markdown(f"**{key}:** {value}")
                     
                     st.divider()
 
-                    # 3. Translated Benefits (Bullet Points)
                     st.markdown("#### Key Benefits (Translated)")
                     details = p.get('full_details', "No details available.")
                     if isinstance(details, list):
                         details = "\n".join([f"- {item}" for item in details])
                     st.markdown(details)
                     
-                    # 4. Gallery
                     st.markdown("#### Gallery")
                     images = p.get('images', [])
                     if len(images) > 1:
@@ -273,5 +255,4 @@ if st.session_state.last_json_response:
                     st.link_button(f"🛒 Buy Now", p['link'], type="primary", use_container_width=True)
 
     except Exception as e:
-        # Silently fail if JSON is malformed (prevents crashes on chat messages)
         pass
